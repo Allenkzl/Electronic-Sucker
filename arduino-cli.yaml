@@ -1,0 +1,16 @@
+# 项目自带的 arduino-cli 配置：所有工具链都放在项目目录内，
+# 不污染 ~/Library/Arduino15，也不会影响你已安装的 Arduino IDE。
+#
+# 路径写成相对路径，这样任何人 clone 下来都能直接用，不依赖本机绝对路径。
+# 注意：arduino-cli 的相对路径是相对「当前工作目录」解析的，
+# 所以请在项目根目录下执行，或直接使用 scripts/ 里的脚本（它们会自动 cd 到根目录）。
+board_manager:
+  additional_urls: []
+
+directories:
+  data: .arduino15
+  downloads: .arduino15/staging
+  user: .arduino15/user
+
+logging:
+  level: info

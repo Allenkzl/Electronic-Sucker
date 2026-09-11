@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>电子吸盘控制台</title>
+<style>
+  :root{
+    --bg:#080b10;
+    --panel:#111823;
+    --panel-hi:#16202d;
+    --line:#22303f;
+    --line-soft:#1a2531;
+    --text:#e8eef6;
+    --muted:#7e91a6;
+    --dim:#586a7d;
+    --pick:#25e0a8;
+    --drop:#f7a83c;
+    --stop:#f04747;
+    --ok:#25e0a8;
+    --radius:16px;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1100px 620px at 50% -12%, #16283a 0%, transparent 62%),
+      var(--bg);
+    color:var(--text);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:26px 18px 42px;
+  }
+  .wrap{max-width:880px;margin:0 auto}
+
+  /* ---------- 顶部 ---------- */
+  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+  .brand{display:flex;align-items:center;gap:11px;margin-right:auto}
+  .brand .dot{
+    width:11px;height:11px;border-radius:50%;background:var(--pick);
+    box-shadow:0 0 0 4px rgba(37,224,168,.13),0 0 14px rgba(37,224,168,.7);
+  }
+  .brand h1{font-size:17px;margin:0;letter-spacing:.4px;font-weight:600}
+  .brand .sub{font-size:11.5px;color:var(--dim);font-family:var(--mono);letter-spacing:.3px}
+
+  .pills{display:flex;gap:7px;flex-wrap:wrap}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:5px 11px;border-radius:999px;
+    background:var(--panel);border:1px solid var(--line);
+    font-size:11.5px;color:var(--muted);font-family:var(--mono);
+    white-space:nowrap;transition:.25s;
+  }
+  .pill i{width:6px;height:6px;border-radius:50%;background:var(--dim);transition:.25s}
+  .pill.on{color:var(--pick);border-color:rgba(37,224,168,.42)}
+  .pill.on i{background:var(--pick);box-shadow:0 0 8px var(--pick)}
+  .pill.bad{color:var(--stop);border-color:rgba(240,71,71,.42)}
+  .pill.bad i{background:var(--stop);box-shadow:0 0 8px var(--stop)}
+
+  /* ---------- 告警条 ---------- */
+  .banner{
+    display:none;align-items:flex-start;gap:10px;
+    padding:12px 15px;margin-bottom:16px;border-radius:12px;
+    background:rgba(240,71,71,.09);border:1px solid rgba(240,71,71,.3);
+    color:#ffb4b4;font-size:13.5px;
+  }
+  .banner.show{display:flex}
+  .banner code{font-family:var(--mono);color:#ffd9a0;font-size:12.5px}
+
+  /* ---------- 主按钮 ---------- */
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  .act{
+    position:relative;overflow:hidden;
+    display:flex;flex-direction:column;align-items:flex-start;gap:3px;
+    min-height:126px;padding:20px 22px;
+    border-radius:var(--radius);cursor:pointer;
+    border:1px solid var(--line);background:var(--panel);
+    color:var(--text);font-family:inherit;text-align:left;
+    transition:transform .12s ease,border-color .2s,background .2s,box-shadow .3s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .act:disabled{opacity:.4;cursor:not-allowed}
+  .act:not(:disabled):hover{transform:translateY(-2px);background:var(--panel-hi)}
+  .act:not(:disabled):active{transform:translateY(0) scale(.985)}
+  .act .ico{font-size:26px;line-height:1;margin-bottom:9px;opacity:.95}
+  .act .t{font-size:25px;font-weight:650;letter-spacing:2px}
+  .act .d{font-size:12.5px;color:var(--muted);letter-spacing:.2px}
+  .act .hint{
+    position:absolute;top:15px;right:17px;font-family:var(--mono);
+    font-size:10.5px;color:var(--dim);border:1px solid var(--line-soft);
+    padding:2px 6px;border-radius:6px;
+  }
+  .act .glow{
+    position:absolute;inset:auto -30% -70% -30%;height:150%;
+    opacity:0;transition:opacity .35s;pointer-events:none;
+  }
+  .act:not(:disabled):hover .glow{opacity:.5}
+
+  #btnPick{border-color:rgba(37,224,168,.3)}
+  #btnPick .t,#btnPick .ico{color:var(--pick)}
+  #btnPick .glow{background:radial-gradient(closest-side,rgba(37,224,168,.28),transparent)}
+  #btnPick.live{border-color:var(--pick);box-shadow:0 0 0 1px rgba(37,224,168,.22),0 8px 34px -14px rgba(37,224,168,.85);background:#0e2019}
+
+  #btnDrop{border-color:rgba(247,168,60,.3)}
+  #btnDrop .t,#btnDrop .ico{color:var(--drop)}
+  #btnDrop .glow{background:radial-gradient(closest-side,rgba(247,168,60,.28),transparent)}
+  #btnDrop.live{border-color:var(--drop);box-shadow:0 0 0 1px rgba(247,168,60,.22),0 8px 34px -14px rgba(247,168,60,.85);background:#221a0d}
+
+  #btnStop{
+    width:100%;min-height:52px;flex-direction:row;align-items:center;justify-content:center;
+    gap:9px;border-color:rgba(240,71,71,.34);margin-bottom:22px;
+  }
+  #btnStop .t{font-size:16px;letter-spacing:3px;color:var(--stop)}
+  #btnStop .ico{font-size:15px;margin:0;color:var(--stop)}
+  #btnStop:not(:disabled):hover{background:rgba(240,71,71,.1)}
+  #btnStop .glow{background:radial-gradient(closest-side,rgba(240,71,71,.3),transparent)}
+
+  /* ---------- 状态灯 ---------- */
+  .lamps{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:22px}
+  .lamp{
+    display:flex;align-items:center;gap:13px;
+    padding:15px 17px;border-radius:13px;
+    background:var(--panel);border:1px solid var(--line-soft);
+    transition:.25s;
+  }
+  .lamp .ring{
+    width:15px;height:15px;border-radius:50%;flex:none;
+    background:#1d2836;border:1px solid var(--line);
+    transition:.25s;
+  }
+  .lamp .name{font-size:14px;font-weight:550}
+  .lamp .meta{font-size:11px;color:var(--dim);font-family:var(--mono);letter-spacing:.3px}
+  .lamp .st{margin-left:auto;font-size:12px;font-family:var(--mono);color:var(--dim)}
+  .lamp.on{border-color:rgba(37,224,168,.4);background:#0d1d18}
+  .lamp.on .ring{background:var(--pick);border-color:var(--pick);box-shadow:0 0 0 4px rgba(37,224,168,.14),0 0 15px var(--pick)}
+  .lamp.on .st{color:var(--pick)}
+  .lamp.hot{border-color:rgba(247,168,60,.4);background:#1e180c}
+  .lamp.hot .ring{background:var(--drop);border-color:var(--drop);box-shadow:0 0 0 4px rgba(247,168,60,.14),0 0 15px var(--drop)}
+  .lamp.hot .st{color:var(--drop)}
+
+  /* ---------- 面板 ---------- */
+  section.card{
+    background:var(--panel);border:1px solid var(--line-soft);
+    border-radius:var(--radius);margin-bottom:16px;overflow:hidden;
+  }
+  section.card > h2{
+    margin:0;padding:14px 18px;font-size:13px;font-weight:600;
+    letter-spacing:1.2px;color:var(--muted);text-transform:uppercase;
+    border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:8px;
+  }
+  section.card > h2 .tag{
+    margin-left:auto;font-family:var(--mono);font-size:10.5px;
+    color:var(--dim);text-transform:none;letter-spacing:.3px;
+  }
+  .body{padding:16px 18px}
+
+  .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .field .row{display:flex;align-items:center;gap:7px}
+  .field input,.field select{
+    width:100%;padding:9px 11px;border-radius:9px;
+    background:#0c131c;border:1px solid var(--line);color:var(--text);
+    font-family:var(--mono);font-size:13.5px;outline:none;transition:.2s;
+  }
+  .field input:focus,.field select:focus{border-color:rgba(37,224,168,.55);background:#0e1720}
+  .field .note{font-size:11px;color:var(--dim);margin-top:5px}
+
+  .wiring{display:grid;gap:9px;font-size:13px}
+  .wire{display:flex;align-items:center;gap:10px;color:var(--muted)}
+  .wire b{
+    font-family:var(--mono);color:var(--text);background:#0c131c;
+    border:1px solid var(--line);padding:2px 8px;border-radius:6px;font-size:12.5px;
+    min-width:44px;text-align:center;
+  }
+  .wire .arrow{color:var(--dim)}
+
+  /* ---------- 日志 ---------- */
+  #log{height:210px;overflow-y:auto;padding:6px 4px;font-family:var(--mono);font-size:12px}
+  #log .e{display:flex;gap:10px;padding:4px 12px;border-radius:7px;line-height:1.55}
+  #log .e:hover{background:#0e151e}
+  #log .ts{color:var(--dim);flex:none}
+  #log .tx{color:#b9c9da;word-break:break-word}
+  #log .e.warn .tx{color:#ffc978}
+  #log .e.error .tx{color:#ff9a9a}
+  #log .none{color:var(--dim);padding:8px 12px}
+  #log::-webkit-scrollbar{width:8px}
+  #log::-webkit-scrollbar-thumb{background:#1e2b39;border-radius:8px}
+
+  footer{text-align:center;color:var(--dim);font-size:11.5px;font-family:var(--mono);padding-top:6px}
+
+  @media (max-width:620px){
+    body{padding:18px 13px 32px}
+    .actions{grid-template-columns:1fr}
+    .lamps{grid-template-columns:1fr}
+    .act{min-height:104px;padding:16px 18px}
+    .act .t{font-size:22px}
+    .act .hint{display:none}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <span class="dot" id="brandDot"></span>
+      <div>
+        <h1>电子吸盘控制台</h1>
+        <div class="sub" id="portLabel">Arduino Uno · A0 吸盘 / A2 电磁阀</div>
+      </div>
+    </div>
+    <div class="pills">
+      <span class="pill" id="pillSrv"><i></i>服务</span>
+      <span class="pill" id="pillSer"><i></i>串口</span>
+      <span class="pill" id="pillDev"><i></i>设备</span>
+    </div>
+  </header>
+
+  <div class="banner" id="banner">
+    <span>⚠️</span>
+    <div id="bannerText"></div>
+  </div>
+
+  <div class="actions">
+    <button class="act" id="btnPick" disabled>
+      <span class="glow"></span>
+      <span class="hint">空格</span>
+      <span class="ico">▼</span>
+      <span class="t">吸 取</span>
+      <span class="d" id="pickDesc">打开吸盘，吸住物体</span>
+    </button>
+    <button class="act" id="btnDrop" disabled>
+      <span class="glow"></span>
+      <span class="hint">回车</span>
+      <span class="ico">▲</span>
+      <span class="t">放 下</span>
+      <span class="d" id="dropDesc">电磁阀进气，放料 800 ms</span>
+    </button>
+  </div>
+
+  <button class="act" id="btnStop" disabled>
+    <span class="glow"></span>
+    <span class="ico">■</span>
+    <span class="t">急 停</span>
+  </button>
+
+  <div class="lamps">
+    <div class="lamp" id="lampPump">
+      <span class="ring"></span>
+      <div>
+        <div class="name">吸盘（气泵）</div>
+        <div class="meta">A0 · 数字 14</div>
+      </div>
+      <span class="st" id="stPump">关</span>
+    </div>
+    <div class="lamp" id="lampValve">
+      <span class="ring"></span>
+      <div>
+        <div class="name">电磁阀</div>
+        <div class="meta">A2 · 数字 16</div>
+      </div>
+      <span class="st" id="stValve">关</span>
+    </div>
+  </div>
+
+  <section class="card">
+    <h2>参数设置 <span class="tag" id="setTag">改动即时生效</span></h2>
+    <div class="body">
+      <div class="fields">
+        <div class="field">
+          <label>吸取保持时长 (ms)</label>
+          <div class="row"><input type="number" id="inPickMs" min="0" step="100" value="0"></div>
+          <div class="note">0 = 一直吸住，直到点「放下」</div>
+        </div>
+        <div class="field">
+          <label>放气脉冲时长 (ms)</label>
+          <div class="row"><input type="number" id="inDropMs" min="50" step="50" value="800"></div>
+          <div class="note">厂家参考值 800 ms</div>
+        </div>
+        <div class="field">
+          <label>看门狗超时 (ms)</label>
+          <div class="row"><input type="number" id="inWatchdog" min="0" step="1000" value="15000"></div>
+          <div class="note">超时无命令自动全关，0 = 关闭</div>
+        </div>
+        <div class="field">
+          <label>输出模式</label>
+          <div class="row">
+            <select id="inMode">
+              <option value="servo">servo（舵机信号，默认）</option>
+              <option value="digital">digital（高低电平）</option>
+            </select>
+          </div>
+          <div class="note">厂家模块用 servo；两线通断型用 digital</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>接线 <span class="tag">改动需重新上传固件</span></h2>
+    <div class="body">
+      <div class="wiring">
+        <div class="wire"><b>A0</b><span class="arrow">→</span>吸盘 / 气泵 模块信号线（数字 14）</div>
+        <div class="wire"><b>A2</b><span class="arrow">→</span>电磁阀 模块信号线（数字 16）</div>
+        <div class="wire"><b>GND</b><span class="arrow">→</span>与外部电源共地（必须）</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>运行日志 <span class="tag" id="logTag">0 条</span></h2>
+    <div id="log"><div class="none">等待事件…</div></div>
+  </section>
+
+  <footer id="foot">未连接</footer>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    pillSrv:$('pillSrv'), pillSer:$('pillSer'), pillDev:$('pillDev'),
+    banner:$('banner'), bannerText:$('bannerText'),
+    btnPick:$('btnPick'), btnDrop:$('btnDrop'), btnStop:$('btnStop'),
+    lampPump:$('lampPump'), lampValve:$('lampValve'),
+    stPump:$('stPump'), stValve:$('stValve'),
+    inPickMs:$('inPickMs'), inDropMs:$('inDropMs'), inWatchdog:$('inWatchdog'), inMode:$('inMode'),
+    pickDesc:$('pickDesc'), dropDesc:$('dropDesc'),
+    log:$('log'), logTag:$('logTag'), foot:$('foot'), portLabel:$('portLabel'),
+    setTag:$('setTag'), brandDot:$('brandDot'),
+  };
+
+  let state = {};
+  let logCount = 0;
+  let busy = false;
+
+  // ---------------- 工具 ----------------
+  const clock = (t) => new Date((t || Date.now()/1000) * 1000)
+    .toLocaleTimeString('zh-CN', {hour12:false});
+
+  function setPill(node, on, bad) {
+    node.classList.toggle('on', !!on && !bad);
+    node.classList.toggle('bad', !!bad);
+  }
+
+  function pushLog(ev) {
+    if (logCount === 0) el.log.innerHTML = '';
+    logCount++;
+    const row = document.createElement('div');
+    row.className = 'e' + (ev.level === 'warn' ? ' warn' : ev.level === 'error' ? ' error' : '');
+    row.innerHTML = `<span class="ts">${clock(ev.t)}</span><span class="tx"></span>`;
+    row.querySelector('.tx').textContent = ev.text;
+    el.log.appendChild(row);
+    while (el.log.children.length > 300) el.log.removeChild(el.log.firstChild);
+    el.log.scrollTop = el.log.scrollHeight;
+    el.logTag.textContent = logCount + ' 条';
+  }
+
+  // ---------------- 界面刷新 ----------------
+  function render() {
+    const connected = !!state.connected;
+    const ready = !!state.ready;
+    const pump = !!state.pump, valve = !!state.valve;
+
+    setPill(el.pillSrv, true, false);
+    setPill(el.pillSer, connected, false);
+    setPill(el.pillDev, ready, false);
+
+    const usable = connected && ready && !busy;
+    el.btnPick.disabled = !usable;
+    el.btnDrop.disabled = !usable;
+    el.btnStop.disabled = !connected;
+
+    el.lampPump.className = 'lamp' + (pump ? ' on' : '');
+    el.lampValve.className = 'lamp' + (valve ? ' hot' : '');
+    el.stPump.textContent = pump ? '吸住中' : '关';
+    el.stValve.textContent = valve ? '放气中' : '关';
+    el.btnPick.classList.toggle('live', pump);
+    el.btnDrop.classList.toggle('live', valve);
+
+    const pm = Number(state.pick_ms ?? 0), dm = Number(state.drop_ms ?? 800);
+    el.pickDesc.textContent = pm > 0 ? `打开吸盘，吸住物体 ${pm} ms` : '打开吸盘，一直吸住直到点「放下」';
+    el.dropDesc.textContent = `电磁阀进气，放料 ${dm} ms`;
+
+    // 表单只在用户没有聚焦时同步，避免打断输入
+    const sync = (node, val) => { if (document.activeElement !== node) node.value = val; };
+    sync(el.inPickMs, pm);
+    sync(el.inDropMs, dm);
+    sync(el.inWatchdog, Number(state.watchdog ?? 15000));
+    if (document.activeElement !== el.inMode && state.mode) el.inMode.value = state.mode;
+
+    el.portLabel.textContent = state.port
+      ? `${state.port} · A0 吸盘 / A2 电磁阀`
+      : 'Arduino Uno · A0 吸盘 / A2 电磁阀';
+
+    el.foot.textContent = connected
+      ? (ready ? `已连接 ${state.port || ''} @ 115200` : '串口已打开，等待开发板握手…')
+      : '未连接';
+
+    el.brandDot.style.background = ready ? 'var(--pick)' : connected ? 'var(--drop)' : 'var(--stop)';
+
+    if (!state.last_error) {
+      el.banner.classList.remove('show');
+    } else {
+      el.banner.classList.add('show');
+      el.bannerText.innerHTML = '';
+      el.bannerText.append(document.createTextNode(state.last_error + ' '));
+      const c = document.createElement('code');
+      c.textContent = 'python3 bridge/bridge.py --list';
+      el.bannerText.appendChild(c);
+    }
+  }
+
+  function applyState(s) {
+    state = Object.assign({}, state, s);
+    render();
+  }
+
+  // ---------------- 与后端通信 ----------------
+  async function post(path, body) {
+    if (busy) return;
+    busy = true; render();
+    try {
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body || {}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) pushLog({t: Date.now()/1000, level:'error', text:`请求失败: ${j.error || r.status}`});
+    } catch (e) {
+      pushLog({t: Date.now()/1000, level:'error', text:`请求失败: ${e.message}`});
+    } finally {
+      busy = false; render();
+    }
+  }
+
+  const api = {
+    pick: () => post('/api/pick', {pick_ms: Number(el.inPickMs.value) || 0}),
+    drop: () => post('/api/drop', {drop_ms: Number(el.inDropMs.value) || 800}),
+    stop: () => post('/api/stop', {}),
+  };
+
+  // ---------------- 参数下发（防抖） ----------------
+  let setTimer = null;
+  function scheduleSettings() {
+    el.setTag.textContent = '下发中…';
+    clearTimeout(setTimer);
+    setTimer = setTimeout(async () => {
+      await post('/api/settings', {
+        pick_ms: Math.max(0, Number(el.inPickMs.value) || 0),
+        drop_ms: Math.max(50, Number(el.inDropMs.value) || 800),
+        watchdog: Math.max(0, Number(el.inWatchdog.value) || 0),
+        mode: el.inMode.value,
+      });
+      el.setTag.textContent = '已下发到设备';
+      setTimeout(() => el.setTag.textContent = '改动即时生效', 1800);
+    }, 450);
+  }
+  [el.inPickMs, el.inDropMs, el.inWatchdog].forEach(n => n.addEventListener('change', scheduleSettings));
+  el.inMode.addEventListener('change', scheduleSettings);
+
+  // ---------------- 事件流 ----------------
+  let es = null, pollTimer = null;
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(async () => {
+      try {
+        const r = await fetch('/api/status');
+        applyState(await r.json());
+      } catch (_) {}
+    }, 1500);
+  }
+
+  function connect() {
+    if (es) es.close();
+    es = new EventSource('/api/events');
+
+    es.onopen = () => { setPill(el.pillSrv, true, false); };
+    es.onmessage = (m) => {
+      let d;
+      try { d = JSON.parse(m.data); } catch (_) { return; }
+      if (d.type === 'state') applyState(d.state);
+      else if (d.type === 'log') pushLog(d.event);
+    };
+    es.onerror = () => {
+      setPill(el.pillSrv, false, true);
+      startPolling();
+      // EventSource 自带重连；同时用轮询兜底
+    };
+  }
+
+  // ---------------- 按钮与快捷键 ----------------
+  el.btnPick.addEventListener('click', api.pick);
+  el.btnDrop.addEventListener('click', api.drop);
+  el.btnStop.addEventListener('click', api.stop);
+
+  document.addEventListener('keydown', (e) => {
+    // 事件目标可能是 document 本身（没有 matches），做一次类型保护
+    const t = e.target;
+    if (t && typeof t.matches === 'function' && t.matches('input, select, textarea')) return;
+    if (e.code === 'Space') { e.preventDefault(); if (!el.btnPick.disabled) api.pick(); }
+    else if (e.code === 'Enter') { e.preventDefault(); if (!el.btnDrop.disabled) api.drop(); }
+    else if (e.code === 'Escape') { e.preventDefault(); if (!el.btnStop.disabled) api.stop(); }
+  });
+
+  // 页面关闭时不留悬空动作：交给后端看门狗兜底，这里只做提示
+  window.addEventListener('beforeunload', () => { if (es) es.close(); });
+
+  // ---------------- 启动 ----------------
+  (async () => {
+    try {
+      const r = await fetch('/api/status');
+      applyState(await r.json());
+    } catch (_) {}
+    connect();
+  })();
+})();
+</script>
+</body>
+</html>

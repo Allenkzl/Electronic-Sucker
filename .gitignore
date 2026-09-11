@@ -1,0 +1,13 @@
+# 本地工具链与构建产物，不入库（约 400MB）
+.arduino15/
+build/
+
+# 运行时状态
+bridge/settings.json
+
+# 测试用的临时 Chrome 配置
+.chrome-*/
+
+.DS_Store
+__pycache__/
+*.pyc
