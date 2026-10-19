@@ -18,7 +18,7 @@ HTTP 接口（只绑定 127.0.0.1，局域网访问不到）:
     GET  /api/events            SSE 实时事件流
     POST /api/pick              {"pick_ms": 0}      吸盘开，0 = 吸到点「放下」为止
     POST /api/drop              {"drop_ms": 800}    吸盘关 + 电磁阀脉冲放料
-    POST /api/stop              两路全关（急停）
+    POST /api/stop              四路全关（急停）
     POST /api/settings          {"pick_ms":0,"drop_ms":800,"watchdog":15000}
     POST /api/mode              {"mode": "servo" | "digital"}
 """
@@ -48,6 +48,19 @@ except ImportError:  # pragma: no cover
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(ROOT, "web")
 SETTINGS_FILE = os.path.join(ROOT, "bridge", "settings.json")
+
+
+class QuietHTTPServer(ThreadingHTTPServer):
+    """浏览器关闭页面或 SSE 断开时，客户端会直接 reset 连接。
+
+    socketserver 默认把这类异常打成整段堆栈，属于纯噪音，这里静音处理。
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 BAUD = 115200
 HEARTBEAT_SEC = 1.5        # 心跳间隔；必须远小于看门狗超时，否则会误触发
@@ -347,7 +360,7 @@ class SerialBridge:
             )
             self.broadcast_state()
         elif msg.get("ev") == "watchdog":
-            self.emit("device", "看门狗触发：长时间无命令，已自动关闭两路输出", "warn")
+            self.emit("device", "看门狗触发：长时间无命令，已自动关闭全部输出", "warn")
         elif msg.get("ev") == "boot":
             self.emit("device", f"固件启动 {msg.get('fw')}（吸盘 {msg.get('pump_pin')} / 电磁阀 {msg.get('valve_pin')}）")
         elif "ok" in msg:
@@ -514,7 +527,7 @@ def make_handler(bridge: SerialBridge):
 
             if path == "/api/stop":
                 ok = bridge.command("STOP")
-                bridge.emit("cmd", "急停：两路全关", "warn")
+                bridge.emit("cmd", "急停：四路全关", "warn")
                 return self._json({"ok": ok})
 
             if path == "/api/settings":
@@ -584,7 +597,7 @@ def main():
     bridge = SerialBridge(args.port)
     threading.Thread(target=bridge.run, name="serial", daemon=True).start()
 
-    httpd = ThreadingHTTPServer((args.host, args.http_port), make_handler(bridge))
+    httpd = QuietHTTPServer((args.host, args.http_port), make_handler(bridge))
     httpd.daemon_threads = True
     url = f"http://{args.host}:{args.http_port}/"
 
@@ -599,7 +612,7 @@ def main():
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
 
     def shutdown(signum, frame):
-        print("\n正在停止，并发送 STOP 关闭两路输出 ...")
+        print("\n正在停止，并发送 STOP 关闭全部四路输出 ...")
         bridge._stop.set()
         bridge.command("STOP")
         threading.Thread(target=httpd.shutdown, daemon=True).start()

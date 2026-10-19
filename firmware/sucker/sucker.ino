@@ -2,20 +2,22 @@
  *  电子吸盘 / 电磁阀 控制器固件
  *  ---------------------------------------------------------------
  *  硬件接线（Arduino Uno / CH340 兼容板）
- *      A0  -> 吸盘（气泵）模块的信号线
- *      A2  -> 电磁阀模块的信号线
- *      两个模块均由外部电源独立供电，并与 Arduino 共地
+ *      A0、A3 -> 吸盘（气泵）两路模块的信号线
+ *      A2、A5 -> 电磁阀两路模块的信号线
+ *      四个模块均由外部电源独立供电，并与 Arduino 共地
+ *      逻辑上「气泵」和「电磁阀」各自的两路始终同时动作
  *
  *  控制原理
  *      厂家模块接收的是「舵机式 PWM 信号」，不是简单的高低电平：
  *          180 = 开，0 = 关
- *      Uno 上 A0/A2 同时就是数字引脚 14/16，Servo 库可以正常驱动它们。
+ *      Uno 上 A0/A2/A3/A5 同时就是数字引脚 14/16/17/19，Servo 库均可正常驱动。
  *
  *  串口协议
  *      115200 8N1，命令以 \n 结尾，不区分大小写
- *        PICK [ms]          吸盘开；ms > 0 时到点自动关，缺省用 pick_ms
- *        DROP [ms]          吸盘关 + 电磁阀脉冲进气放料，缺省用 drop_ms
- *        STOP               两路全关（急停）
+ *        PICK [ms]          两路吸盘同时开；ms > 0 时到点自动关，缺省用 pick_ms
+ *        DROP [ms]          吸盘关 + 两路电磁阀脉冲进气放料，缺省用 drop_ms
+ *        STOP               四路全关（急停）
+ *        TEST P1|P2|V1|V2 [ms]  单独点动一路，装机时核对接线（上限 10 秒）
  *        SET pick_ms N      吸取保持时长，0 = 一直吸到 DROP
  *        SET drop_ms N      放气脉冲时长（毫秒）
  *        SET watchdog N     看门狗超时（毫秒），0 = 关闭
@@ -25,28 +27,35 @@
  *      状态变化时固件会主动上报 {"ev":"state",...}
  *
  *  安全设计
- *      1. 上电第一时间把两路都置为「关」，避免一插电就吸住。
+ *      1. 上电第一时间把四路都置为「关」，避免一插电就吸住。
  *      2. 看门狗：超过 watchdog 毫秒没有收到任何命令且处于开启态 -> 自动全关，
  *         防止上位机崩溃 / USB 掉线后气泵一直空转烧毁。
- *      3. 打开串口时 Uno 会因 DTR 复位一次，这是正常现象；复位后两路为关。
+ *      3. 打开串口时 Uno 会因 DTR 复位一次，这是正常现象；复位后四路为关。
  */
 
 #include <Servo.h>
 
 // ------------------------------- 引脚 -------------------------------
-const uint8_t PIN_PUMP  = A0;   // 吸盘（气泵），数字引脚 14
-const uint8_t PIN_VALVE = A2;   // 电磁阀，数字引脚 16
-const uint8_t PIN_LED   = 13;   // 板载 LED：亮 = 吸盘工作中
+// 每一类设备支持多路，逻辑上一起动作。顺序即 P1/P2、V1/V2 的编号。
+#define N_PUMP  2
+#define N_VALVE 2
+
+const uint8_t PIN_PUMP[N_PUMP]   = {A0, A3};   // 吸盘（气泵）：A0、A3
+const uint8_t PIN_VALVE[N_VALVE] = {A2, A5};   // 电磁阀：      A2、A5
+const uint8_t PIN_LED            = 13;         // 板载 LED：亮 = 气泵工作中
 
 const int ANGLE_OFF = 0;        // 关
 const int ANGLE_ON  = 180;      // 开
 
+// 单路测试的通电时间上限，避免测试时长时间通电
+const uint32_t TEST_MAX_MS = 10000;
+
 // ------------------------------- 输出 -------------------------------
 enum OutMode { MODE_SERVO, MODE_DIGITAL };
 
-Servo     pumpServo;
-Servo     valveServo;
-OutMode   outMode = MODE_SERVO;
+Servo   pumpServo[N_PUMP];
+Servo   valveServo[N_VALVE];
+OutMode outMode = MODE_SERVO;
 
 // ---------------------------- 运行时状态 ----------------------------
 bool     pumpOn  = false;
@@ -60,6 +69,12 @@ unsigned long pumpOffAt  = 0;  // pickMs > 0 时吸盘的自动关闭时刻
 unsigned long valveOffAt = 0;  // 电磁阀放气脉冲的结束时刻
 unsigned long lastCmdAt  = 0;  // 最近一次收到有效命令的时刻
 
+// 单路测试状态（装机时用来一路一路核对接线）
+bool          testActive = false;
+uint8_t       testKind   = 0;      // 0 = 泵，1 = 阀
+uint8_t       testIdx    = 0;      // 第几路
+unsigned long testOffAt  = 0;
+
 // 上报去重
 bool lastReportedPump  = false;
 bool lastReportedValve = false;
@@ -71,20 +86,37 @@ uint8_t lineLen = 0;
 
 // ============================== 底层输出 ==============================
 
-void writeOut(bool isPump, bool on) {
+// 写入单路：kind 0 = 气泵，1 = 电磁阀；idx = 第几路
+void writeOne(uint8_t kind, uint8_t idx, bool on) {
+  uint8_t pin = kind ? PIN_VALVE[idx] : PIN_PUMP[idx];
   if (outMode == MODE_SERVO) {
-    Servo &s = isPump ? pumpServo : valveServo;
+    Servo &s = kind ? valveServo[idx] : pumpServo[idx];
     s.write(on ? ANGLE_ON : ANGLE_OFF);
   } else {
-    digitalWrite(isPump ? PIN_PUMP : PIN_VALVE, on ? HIGH : LOW);
+    digitalWrite(pin, on ? HIGH : LOW);
   }
 }
 
+void writeAllPumps(bool on) {
+  for (uint8_t i = 0; i < N_PUMP; i++) writeOne(0, i, on);
+}
+
+void writeAllValves(bool on) {
+  for (uint8_t i = 0; i < N_VALVE; i++) writeOne(1, i, on);
+}
+
 void applyOutputs() {
-  writeOut(true, pumpOn);
-  writeOut(false, valveOn);
+  writeAllPumps(pumpOn);
+  writeAllValves(valveOn);
   digitalWrite(PIN_LED, pumpOn ? HIGH : LOW);
   stateDirty = true;
+}
+
+// 结束单路测试，把该路关掉（不影响逻辑状态）
+void cancelTest() {
+  if (!testActive) return;
+  testActive = false;
+  writeOne(testKind, testIdx, false);
 }
 
 void setPump(bool on) {
@@ -102,6 +134,7 @@ void setValve(bool on) {
 void stopAll() {
   pumpOffAt  = 0;
   valveOffAt = 0;
+  cancelTest();
   // 直接赋值再统一刷新，避免两次串口上报
   bool changed = pumpOn || valveOn;
   pumpOn  = false;
@@ -111,30 +144,63 @@ void stopAll() {
 }
 
 void setOutMode(OutMode m) {
-  // 切换模式前先确保两路都关，避免电平冲突
+  // 切换模式前先确保全部关闭，避免电平冲突
   pumpOffAt  = 0;
   valveOffAt = 0;
   pumpOn     = false;
   valveOn    = false;
+  testActive = false;
 
   if (m == MODE_SERVO) {
-    pinMode(PIN_PUMP, OUTPUT);
-    pinMode(PIN_VALVE, OUTPUT);
-    pumpServo.attach(PIN_PUMP);
-    valveServo.attach(PIN_VALVE);
+    for (uint8_t i = 0; i < N_PUMP; i++) {
+      pinMode(PIN_PUMP[i], OUTPUT);
+      pumpServo[i].attach(PIN_PUMP[i]);
+    }
+    for (uint8_t i = 0; i < N_VALVE; i++) {
+      pinMode(PIN_VALVE[i], OUTPUT);
+      valveServo[i].attach(PIN_VALVE[i]);
+    }
   } else {
-    pumpServo.detach();
-    valveServo.detach();
-    pinMode(PIN_PUMP, OUTPUT);
-    pinMode(PIN_VALVE, OUTPUT);
-    digitalWrite(PIN_PUMP, LOW);
-    digitalWrite(PIN_VALVE, LOW);
+    for (uint8_t i = 0; i < N_PUMP; i++) {
+      pumpServo[i].detach();
+      pinMode(PIN_PUMP[i], OUTPUT);
+      digitalWrite(PIN_PUMP[i], LOW);
+    }
+    for (uint8_t i = 0; i < N_VALVE; i++) {
+      valveServo[i].detach();
+      pinMode(PIN_VALVE[i], OUTPUT);
+      digitalWrite(PIN_VALVE[i], LOW);
+    }
   }
   outMode = m;
   applyOutputs();
 }
 
 // ============================== 状态上报 ==============================
+
+const __FlashStringHelper *pinName(uint8_t pin) {
+  switch (pin) {
+    case A0: return F("A0");
+    case A1: return F("A1");
+    case A2: return F("A2");
+    case A3: return F("A3");
+    case A4: return F("A4");
+    case A5: return F("A5");
+    default: return F("?");
+  }
+}
+
+void printPinList(const uint8_t *pins, uint8_t n) {
+  for (uint8_t i = 0; i < n; i++) {
+    if (i) Serial.print(',');
+    Serial.print(pinName(pins[i]));
+  }
+}
+
+const __FlashStringHelper *channelName(uint8_t kind, uint8_t idx) {
+  if (kind == 0) return idx == 0 ? F("P1") : F("P2");
+  return idx == 0 ? F("V1") : F("V2");
+}
 
 void reportState(bool force) {
   if (!force && !stateDirty && pumpOn == lastReportedPump && valveOn == lastReportedValve) return;
@@ -154,6 +220,8 @@ void reportState(bool force) {
   Serial.print(watchdogMs);
   Serial.print(F(",\"mode\":\""));
   Serial.print(outMode == MODE_SERVO ? F("servo") : F("digital"));
+  Serial.print(F("\",\"test\":\""));
+  Serial.print(testActive ? channelName(testKind, testIdx) : F("-"));
   Serial.print(F("\",\"up\":"));
   Serial.print(millis());
   Serial.println(F("}"));
@@ -198,6 +266,28 @@ void doStop() {
   reportState(true);
 }
 
+// 单独点动一路，用于装机时核对接线
+void doTest(uint8_t kind, uint8_t idx, uint32_t ms) {
+  lastCmdAt = millis();
+  stopAll();                  // 测试是隔离的，先把其它路全部关掉
+
+  if (ms == 0) ms = 800;
+  if (ms > TEST_MAX_MS) ms = TEST_MAX_MS;
+
+  testActive = true;
+  testKind   = kind;
+  testIdx    = idx;
+  testOffAt  = millis() + ms;
+  writeOne(kind, idx, true);
+
+  Serial.print(F("{\"ok\":\"TEST\",\"ch\":\""));
+  Serial.print(channelName(kind, idx));
+  Serial.print(F("\",\"ms\":"));
+  Serial.print(ms);
+  Serial.println(F("\"}"));
+  reportState(true);
+}
+
 // ============================== 命令解析 ==============================
 
 void upperInPlace(char *s) {
@@ -223,6 +313,17 @@ void handleLine(char *line) {
 
   } else if (strcmp(cmd, "STOP") == 0 || strcmp(cmd, "OFF") == 0) {
     doStop();
+
+  } else if (strcmp(cmd, "TEST") == 0) {
+    if (a1 == NULL) { err(F("TEST needs P1|P2|V1|V2")); return; }
+    upperInPlace(a1);
+    uint8_t kind, idx;
+    if      (strcmp(a1, "P1") == 0) { kind = 0; idx = 0; }
+    else if (strcmp(a1, "P2") == 0) { kind = 0; idx = 1; }
+    else if (strcmp(a1, "V1") == 0) { kind = 1; idx = 0; }
+    else if (strcmp(a1, "V2") == 0) { kind = 1; idx = 1; }
+    else { err(F("TEST needs P1|P2|V1|V2")); return; }
+    doTest(kind, idx, a2 ? strtoul(a2, NULL, 10) : 800);
 
   } else if (strcmp(cmd, "PING") == 0) {
     Serial.println(F("PONG"));
@@ -251,7 +352,8 @@ void handleLine(char *line) {
     reportState(true);
 
   } else if (strcmp(cmd, "HELP") == 0) {
-    Serial.println(F("PICK [ms] | DROP [ms] | STOP | SET pick_ms|drop_ms|watchdog N | MODE servo|digital | STATUS | PING"));
+    Serial.println(F("PICK [ms] | DROP [ms] | STOP | TEST P1|P2|V1|V2 [ms] | "
+                     "SET pick_ms|drop_ms|watchdog N | MODE servo|digital | STATUS | PING"));
 
   } else {
     err(F("unknown command"));
@@ -261,11 +363,15 @@ void handleLine(char *line) {
 // ============================== 主流程 ==============================
 
 void setup() {
-  // 关键：先把输出脚拉到关闭状态，再交给 Servo 库
-  pinMode(PIN_PUMP, OUTPUT);
-  pinMode(PIN_VALVE, OUTPUT);
-  digitalWrite(PIN_PUMP, LOW);
-  digitalWrite(PIN_VALVE, LOW);
+  // 关键：先把四路输出都拉到关闭状态，再交给 Servo 库
+  for (uint8_t i = 0; i < N_PUMP; i++) {
+    pinMode(PIN_PUMP[i], OUTPUT);
+    digitalWrite(PIN_PUMP[i], LOW);
+  }
+  for (uint8_t i = 0; i < N_VALVE; i++) {
+    pinMode(PIN_VALVE[i], OUTPUT);
+    digitalWrite(PIN_VALVE[i], LOW);
+  }
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, LOW);
 
@@ -276,7 +382,11 @@ void setup() {
 
   lastCmdAt = millis();
   Serial.println(F("READY"));
-  Serial.println(F("{\"ev\":\"boot\",\"fw\":\"sucker-1.0\",\"pump_pin\":\"A0\",\"valve_pin\":\"A2\"}"));
+  Serial.print(F("{\"ev\":\"boot\",\"fw\":\"sucker-1.1\",\"pump_pin\":\""));
+  printPinList(PIN_PUMP, N_PUMP);
+  Serial.print(F("\",\"valve_pin\":\""));
+  printPinList(PIN_VALVE, N_VALVE);
+  Serial.println(F("\"}"));
   reportState(true);
 }
 
@@ -301,6 +411,13 @@ void loop() {
   // 若在 loop 开头取值，它会早于 handleLine() 里刚写入的 lastCmdAt，
   // 无符号相减就会下溢成一个极大的数，导致看门狗在刚收到命令的瞬间误触发。
   unsigned long now = millis();
+
+  // ---- 单路测试到时关闭 ----
+  if (testActive && (long)(now - testOffAt) >= 0) {
+    testActive = false;
+    stopAll();
+    reportState(true);
+  }
 
   // ---- 定时关闭 ----
   if (pumpOn && pumpOffAt != 0 && (long)(now - pumpOffAt) >= 0) {

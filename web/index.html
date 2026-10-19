@@ -212,7 +212,7 @@
       <span class="dot" id="brandDot"></span>
       <div>
         <h1>电子吸盘控制台</h1>
-        <div class="sub" id="portLabel">Arduino Uno · A0 吸盘 / A2 电磁阀</div>
+        <div class="sub" id="portLabel">Arduino Uno · A0+A3 吸盘 / A2+A5 电磁阀</div>
       </div>
     </div>
     <div class="pills">
@@ -254,16 +254,16 @@
     <div class="lamp" id="lampPump">
       <span class="ring"></span>
       <div>
-        <div class="name">吸盘（气泵）</div>
-        <div class="meta">A0 · 数字 14</div>
+        <div class="name">吸盘（气泵）×2</div>
+        <div class="meta">A0 + A3 同时动作</div>
       </div>
       <span class="st" id="stPump">关</span>
     </div>
     <div class="lamp" id="lampValve">
       <span class="ring"></span>
       <div>
-        <div class="name">电磁阀</div>
-        <div class="meta">A2 · 数字 16</div>
+        <div class="name">电磁阀 ×2</div>
+        <div class="meta">A2 + A5 同时动作</div>
       </div>
       <span class="st" id="stValve">关</span>
     </div>
@@ -306,8 +306,8 @@
     <h2>接线 <span class="tag">改动需重新上传固件</span></h2>
     <div class="body">
       <div class="wiring">
-        <div class="wire"><b>A0</b><span class="arrow">→</span>吸盘 / 气泵 模块信号线（数字 14）</div>
-        <div class="wire"><b>A2</b><span class="arrow">→</span>电磁阀 模块信号线（数字 16）</div>
+        <div class="wire"><b>A0 + A3</b><span class="arrow">→</span>吸盘 / 气泵 两路模块信号线（数字 14 / 17）</div>
+        <div class="wire"><b>A2 + A5</b><span class="arrow">→</span>电磁阀 两路模块信号线（数字 16 / 19）</div>
         <div class="wire"><b>GND</b><span class="arrow">→</span>与外部电源共地（必须）</div>
       </div>
     </div>
@@ -396,8 +396,8 @@
     if (document.activeElement !== el.inMode && state.mode) el.inMode.value = state.mode;
 
     el.portLabel.textContent = state.port
-      ? `${state.port} · A0 吸盘 / A2 电磁阀`
-      : 'Arduino Uno · A0 吸盘 / A2 电磁阀';
+      ? `${state.port} · A0+A3 吸盘 / A2+A5 电磁阀`
+      : 'Arduino Uno · A0+A3 吸盘 / A2+A5 电磁阀';
 
     el.foot.textContent = connected
       ? (ready ? `已连接 ${state.port || ''} @ 115200` : '串口已打开，等待开发板握手…')
